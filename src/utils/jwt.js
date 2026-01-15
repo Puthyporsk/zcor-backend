@@ -1,16 +1,22 @@
 // utils/jwt.js
 import jwt from "jsonwebtoken";
 
-export function signAccessToken(user) {
+export function signAccessToken(user, remember = false) {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET is not set");
 
-  const expiresIn = process.env.JWT_EXPIRES_IN || "7d";
+  const defaultExpiresIn = process.env.JWT_EXPIRES_IN || "12h";
+
+  const expiresIn = remember ? "30d" : defaultExpiresIn;
 
   return jwt.sign(
-    { sub: String(user._id) },
+    {
+      sub: user._id.toString(),
+      business: user.business?.toString(),
+      role: user.role,
+    },
     secret,
-    { expiresIn }
+    { expiresIn },
   );
 }
 

@@ -4,7 +4,7 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
-
+import cookieParser from "cookie-parser";
 import authenticate from "./src/middleware/authenticate.js";
 import authRouter from "./src/routes/auth.js";
 import usersRouter from "./src/routes/users.js";
@@ -18,8 +18,15 @@ app.set("view engine", "ejs");
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
-app.use(cors());
+app.use(
+  cors({
+    origin: "http://localhost:3000",
+    credentials: true,
+  }),
+);
+app.options("*", cors());
 app.use(express.json());
+app.use(cookieParser());
 
 // sets req.user (if Bearer token present)
 app.use(authenticate);

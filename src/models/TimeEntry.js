@@ -20,11 +20,9 @@ const TimeEntrySchema = new Schema(
   {
     business: { type: Schema.Types.ObjectId, ref: "Business", required: true, index: true },
     user: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
-
-    // Keep for future/use (optional)
     location: { type: Schema.Types.ObjectId, ref: "Location" },
 
-    // ✅ New: entry type (manual going forward)
+    // New: entry type (manual going forward)
     entryType: {
       type: String,
       enum: ["manual", "clock"],
@@ -32,7 +30,7 @@ const TimeEntrySchema = new Schema(
       index: true,
     },
 
-    // ✅ Manual fields (no seconds)
+    // Manual fields (no seconds)
     workDate: {
       type: String,
       trim: true,
@@ -60,11 +58,6 @@ const TimeEntrySchema = new Schema(
     },
     breakMinutes: { type: Number, min: 0, default: 0 },
 
-    // ---- Legacy clock fields (kept only so old docs don't explode) ----
-    clockInAt: { type: Date },
-    clockOutAt: { type: Date },
-    breaks: { type: [BreakSchema], default: [] },
-
     // Workflow
     status: {
       type: String,
@@ -87,25 +80,12 @@ const TimeEntrySchema = new Schema(
 
 TimeEntrySchema.plugin(tenantScopedPlugin);
 
-// ✅ Validation: enforce the manual fields when entryType === "manual"
+// Validation: enforce the manual fields when entryType === "manual"
 TimeEntrySchema.pre("validate", function () {
   if (this.entryType === "manual") {
     if (!this.workDate) this.invalidate("workDate", "workDate is required for manual entries");
     if (!this.startTime) this.invalidate("startTime", "startTime is required for manual entries");
     if (!this.endTime) this.invalidate("endTime", "endTime is required for manual entries");
-  }
-
-  // Legacy validations for clock (so old docs still validate if saved)
-  if (this.entryType === "clock") {
-    if (this.clockOutAt && this.clockInAt && this.clockOutAt < this.clockInAt) {
-      this.invalidate("clockOutAt", "clockOutAt must be after clockInAt");
-    }
-    for (const b of this.breaks || []) {
-      if (b.endAt && b.endAt < b.startAt) {
-        this.invalidate("breaks", "Break endAt must be after startAt");
-        break;
-      }
-    }
   }
 });
 

@@ -8,6 +8,39 @@ import { signAccessToken } from "../utils/jwt.js";
 import { badRequest, conflict, unauthorized } from "../utils/httpError.js";
 
 const router = Router();
+const COOKIE_NAME = process.env.COOKIE_NAME || "auth_token";
+
+/**
+ * Cookie options:
+ * - httpOnly: JS can't read the token
+ * - sameSite: "lax" works well for localhost + most normal navigation
+ * - secure: only true in production (https)
+ */
+function cookieBaseOptions() {
+  return {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+  };
+}
+
+function setAuthCookie(res, token, remember = false) {
+  // If remember = true => persist cookie longer; else session cookie
+  const opts = cookieBaseOptions();
+
+  if (remember) {
+    // 30 days
+    opts.maxAge = 30 * 24 * 60 * 60 * 1000;
+  }
+  // if not remember: no maxAge => session cookie
+
+  res.cookie(COOKIE_NAME, token, opts);
+}
+
+function clearAuthCookie(res) {
+  res.clearCookie(COOKIE_NAME, cookieBaseOptions());
+}
 
 function userResponse(user) {
   // your User schema already strips sensitive fields in toJSON, but keep explicit:
@@ -33,7 +66,8 @@ function userResponse(user) {
  */
 router.post("/register", async (req, res, next) => {
   try {
-    const { businessName, firstName, lastName, displayName, email, password } = req.body || {};
+    const { businessName, firstName, lastName, displayName, email, password, remember } =
+      req.body || {};
 
     if (!businessName || String(businessName).trim().length < 2) {
       throw badRequest("businessName is required");
@@ -46,7 +80,6 @@ router.post("/register", async (req, res, next) => {
     const baseSlug = slugify(String(businessName), { lower: true, strict: true });
     if (!baseSlug) throw badRequest("Invalid businessName");
 
-    // ensure unique slug
     let slug = baseSlug;
     for (let i = 0; i < 10; i++) {
       // eslint-disable-next-line no-await-in-loop
@@ -61,8 +94,10 @@ router.post("/register", async (req, res, next) => {
       status: "trial",
     });
 
-    // ensure email unique within business (your user index enforces this too)
-    const existing = await User.findOne({ business: business._id, email: String(email).toLowerCase().trim() })
+    const existing = await User.findOne({
+      business: business._id,
+      email: String(email).toLowerCase().trim(),
+    })
       .select("_id")
       .lean();
 
@@ -76,17 +111,22 @@ router.post("/register", async (req, res, next) => {
       email: String(email).toLowerCase().trim(),
       role: "owner",
       status: "active",
-      password, // uses your virtual setter + pre-save hashing
+      password,
     });
 
     business.createdBy = owner._id;
     await business.save();
 
     const token = signAccessToken(owner);
+    setAuthCookie(res, token, Boolean(remember));
 
     res.status(201).json({
-      token,
-      business: { _id: business._id, name: business.name, slug: business.slug, status: business.status },
+      business: {
+        _id: business._id,
+        name: business.name,
+        slug: business.slug,
+        status: business.status,
+      },
       user: userResponse(owner),
     });
   } catch (err) {
@@ -101,33 +141,39 @@ router.post("/register", async (req, res, next) => {
  * If you later support multiple businesses per email, require businessSlug.
  * For now: we find the user by email across businesses; if multiple, we error.
  */
+/**
+ * POST /api/auth/login
+ * Body: { email, password, businessSlug?, remember? }
+ * Sets HttpOnly cookie, returns { user }
+ */
 router.post("/login", async (req, res, next) => {
   try {
-    const { email, password, businessSlug } = req.body || {};
+    const { email, password, businessSlug, remember } = req.body || {};
     if (!email || !password) throw badRequest("email and password are required");
 
     const emailNorm = String(email).toLowerCase().trim();
 
     let business = null;
     if (businessSlug) {
-      business = await Business.findOne({ slug: String(businessSlug).toLowerCase().trim() }).select("_id name slug status");
+      business = await Business.findOne({
+        slug: String(businessSlug).toLowerCase().trim(),
+      }).select("_id name slug status");
       if (!business) throw unauthorized("Invalid credentials");
     }
 
-    // Find matching users (may be >1 if same email exists across tenants)
     const q = business ? { business: business._id, email: emailNorm } : { email: emailNorm };
 
-    const users = await User.find(q).select("+passwordHash business role status email firstName lastName displayName").lean(false);
+    const users = await User.find(q).select(
+      "+passwordHash business role status email firstName lastName displayName",
+    );
 
     if (!users || users.length === 0) throw unauthorized("Invalid credentials");
     if (!business && users.length > 1) {
-      // force choosing business
       throw badRequest("Multiple businesses found for this email. Provide businessSlug.");
     }
 
     const user = users[0];
 
-    // comparePassword needs passwordHash, so ensure it was selected:
     const ok = await user.comparePassword(password);
     if (!ok) throw unauthorized("Invalid credentials");
 
@@ -137,12 +183,23 @@ router.post("/login", async (req, res, next) => {
 
     await user.markLogin();
 
-    const token = signAccessToken(user);
+    const token = signAccessToken(user, Boolean(remember));
+    setAuthCookie(res, token, Boolean(remember));
 
-    res.json({ token, user: userResponse(user) });
+    // Don't return token to JS
+    res.json({ user: userResponse(user) });
   } catch (err) {
     next(err);
   }
+});
+
+/**
+ * POST /api/auth/logout
+ * Clears cookie
+ */
+router.post("/logout", (req, res) => {
+  clearAuthCookie(res);
+  res.json({ message: "Logged out" });
 });
 
 /**
